@@ -1,6 +1,6 @@
 {
   "name": "@realashrafi/offline-video-core",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Offline PWA video download manager with OPFS, IndexedDB, Web Locks and AES-GCM encryption",
   "type": "module",
   "main": "./dist/index.cjs",
