@@ -1,6 +1,8 @@
-# Offline Video Core
+# @realashrafi/offline-video-core
 
-A lightweight, robust, and TypeScript-first offline video caching and download engine for modern web apps and PWAs. Powered by the **Origin Private File System (OPFS)** for high-performance chunked file storage, **IndexedDB** for metadata and state persistence, **Web Locks API** for cross-tab concurrency, and **Web Crypto (AES-GCM)** for hardware-accelerated segment and key encryption.
+> Offline PWA video download manager with OPFS, IndexedDB, Web Locks and AES-GCM encryption.
+
+A lightweight, robust, and TypeScript-first offline video caching and download engine for modern web apps and PWAs. Powered by the **Origin Private File System (OPFS)** for high-performance chunked file storage, **IndexedDB** for metadata and state persistence, the **Web Locks API** for cross-tab concurrency, and **Web Crypto (AES-GCM)** for encrypting sensitive decryption keys at rest.
 
 [![npm version](https://img.shields.io/npm/v/@realashrafi/offline-video-core.svg)](https://www.npmjs.com/package/@realashrafi/offline-video-core)
 [![TypeScript](https://img.shields.io/badge/TypeScript-ready-blue.svg)](https://www.typescriptlang.org/)
@@ -10,72 +12,42 @@ A lightweight, robust, and TypeScript-first offline video caching and download e
 
 ## Table of Contents
 
-- [Architecture Overview](#architecture-overview)
 - [Features](#features)
 - [Installation](#installation)
 - [Quick Start](#quick-start)
-- [React Hook: useVideoDownloader](#react-hook-usevideodownloader)
+- [React Hook: `useVideoDownloader`](#react-hook-usevideodownloader)
   - [Input Parameters](#input-parameters)
   - [Return Values & States](#return-values--states)
-- [Integration with Sibtorsh Player](#integration-with-sibtorsh-player)
-- [Low-Level Services API](#low-level-services-api)
-  - [Diagnostics](#diagnostics)
-  - [Database Service (offlineDb)](#database-service-offlinedb)
-  - [Storage Service (opfsStorage)](#storage-service-opfsstorage)
-  - [Crypto Service (cryptoService)](#crypto-service-cryptoservice)
-- [HLS & AES-128 Offline Playback](#hls--aes-128-offline-playback)
+- [Low-Level Exports](#low-level-exports)
+  - [OPFS Storage Service](#opfs-storage-service)
+  - [Database Service (IndexedDB)](#database-service-indexeddb)
+  - [Crypto Service (AES-GCM)](#crypto-service-aes-gcm)
 - [Concurrency & Tab Synchronization](#concurrency--tab-synchronization)
-- [Browser Support & PWA Storage Quota](#browser-support--pwa-storage-quota)
+- [Browser Support & Storage Quota](#browser-support--storage-quota)
 - [Troubleshooting](#troubleshooting)
 - [License](#license)
 
 ---
 
-## Architecture Overview
-
-```text
-┌────────────────────────────────────────────────────────┐
-│                   React Application                    │
-│             useVideoDownloader() Hook                  │
-└───────────────────────────┬────────────────────────────┘
-                            │
-┌───────────────────────────▼────────────────────────────┐
-│                  Offline Video Core                    │
-│  ┌───────────────────────┬───────────────────────────┐ │
-│  │   IndexedDB Metadata  │   OPFS Chunked Storage    │ │
-│  │    (States/Progress)  │   (Encrypted / Raw Blobs) │ │
-│  └───────────────────────┴───────────────────────────┘ │
-│  ┌───────────────────────┬───────────────────────────┐ │
-│  │   Web Crypto AES-GCM  │   Web Locks Concurrency   │ │
-│  │  (Zero-overhead keys) │    (Multi-tab safe locks) │ │
-│  └───────────────────────┴───────────────────────────┘ │
-└────────────────────────────────────────────────────────┘
-```
-
----
-
 ## Features
 
-- **Origin Private File System (OPFS):** Direct, sandboxed, high-throughput storage for large video files without main-thread or heap memory bottlenecks.
-- **IndexedDB Metadata Persistence:** Tracks video status, downloaded bytes, total size, course/lesson relations, and timestamps.
-- **Web Crypto (AES-GCM):** Hardware-accelerated at-rest encryption for video chunks and sensitive AES decryption keys.
-- **Cross-Tab Concurrency (Web Locks API):** Guarantees that multiple open tabs will never duplicate downloads or corrupt storage files.
-- **Resumable & Chunked Downloads:** Automatic byte-range handling with seamless resume, pause, cancel, and retry capabilities.
-- **Headless React Integration:** First-class `useVideoDownloader` React hook with fine-grained reactive status and progress updates.
-- **Local Playback Generation:** Instantly turns stored OPFS files and decryption keys into local Blob/Object URLs for players like `@alirezahosseini/sibtorsh-player`.
-- **System Diagnostics:** One-line check to verify browser capabilities before initiating downloads.
+- **OPFS Storage:** Direct, sandboxed, high-throughput storage for large video files without main-thread or heap memory bottlenecks. Chunks stream into a temp file, then are finalized atomically into a `videos/` directory with a JSON manifest.
+- **IndexedDB Persistence:** Tracks status, downloaded bytes, total size, course/grade/tutorial relations, timestamps, and ETags under `AppOfflineDB` (store: `downloads`, keyed by `[videoId, part]`).
+- **Resumable & Chunked Downloads:** Automatic byte-range handling (`Range` + `If-Range`/`ETag`) with seamless pause, resume, cancel, and integrity verification against `Content-Length`.
+- **Cross-Tab Safety (Web Locks API):** Downloads and deletions run under per-video locks (`offline-video-{videoId}-{part}`), so multiple open tabs never duplicate work or corrupt files.
+- **Key Protection (Web Crypto, AES-GCM 256):** Stream decryption keys are encrypted with a non-extractable, per-origin master key persisted in IndexedDB (`AppOfflineCrypto`), then decrypted on playback.
+- **Cross-Tab Reactivity:** Read/write transactions dispatch the `OFFLINE_DOWNLOADS_CHANGED` window event so every open tab stays in sync.
+- **Headless React Integration:** First-class `useVideoDownloader` hook with fine-grained reactive status and progress updates, plus a default export.
 
 ---
 
 ## Installation
 
-Install the core package into your PWA or frontend application:
-
 ```bash
 npm install @realashrafi/offline-video-core
 ```
 
-Ensure peer dependencies are installed:
+Peer dependencies (React 18+):
 
 ```bash
 npm install react react-dom
@@ -85,59 +57,27 @@ npm install react react-dom
 
 ## Quick Start
 
-### 1. Verify Browser Support (Diagnostics)
-
-Run diagnostics on application startup or when mounting video modules:
-
 ```tsx
-import { runDiagnostics } from "@realashrafi/offline-video-core";
-
-const diag = await runDiagnostics();
-console.log("Storage System Status:", diag);
-```
-
-### 2. Basic Download Component
-
-```tsx
-import React from "react";
 import { useVideoDownloader } from "@realashrafi/offline-video-core";
 
-export default function DownloadAction({ videoId, part, videoUrl, keyUrl, title }) {
+export default function DownloadAction({ videoId, part, videoUrl, title }) {
   const {
     status,
     progress,
     startDownload,
     pauseDownload,
-    removeOfflineVideo,
-  } = useVideoDownloader({
-    videoId,
-    part,
-    videoUrl,
-    keyUrl,
-    metadata: { title },
-  });
+    removeDownload,
+  } = useVideoDownloader({ videoId, part, videoUrl, metadata: { title } });
 
   if (status === "downloading") {
-    return (
-      <button onClick={pauseDownload}>
-        توقف ({Math.round(progress)}%)
-      </button>
-    );
+    return <button onClick={pauseDownload}>Pause ({Math.round(progress)}%)</button>;
   }
 
   if (status === "completed") {
-    return (
-      <button onClick={removeOfflineVideo}>
-        حذف از حافظه آفلاین
-      </button>
-    );
+    return <button onClick={removeDownload}>Remove from offline storage</button>;
   }
 
-  return (
-    <button onClick={startDownload}>
-      دانلود آفلاین
-    </button>
-  );
+  return <button onClick={startDownload}>Download for offline</button>;
 }
 ```
 
@@ -145,185 +85,157 @@ export default function DownloadAction({ videoId, part, videoUrl, keyUrl, title 
 
 ## React Hook: `useVideoDownloader`
 
-The `useVideoDownloader` hook provides end-to-end reactive state management for downloading, pausing, resuming, and deleting videos.
+End-to-end reactive state management for downloading, pausing, resuming, and deleting videos. Available as a named and as the default export.
 
 ### Input Parameters (`VideoDownloaderInput`)
 
 | Parameter | Type | Required | Description |
 | :--- | :--- | :--- | :--- |
-| `videoId` | `string | number` | Yes | Unique identifier of the video/lesson. |
-| `part` | `number` | Yes | Part or chapter number (e.g., `1`, `2`). |
-| `videoUrl` | `string` | No | Remote URL to fetch the video source (MP4/TS/m3u8). |
-| `keyUrl` | `string` | No | Protected remote key URL for AES-128 encrypted streams. |
-| `metadata` | `Partial<OfflineVideoMetadata>` | No | Context information (e.g., `title`, `courseId`, `gradeId`, `tutorialId`). |
+| `videoId` | `number` | Yes | Unique identifier of the video/lesson. |
+| `part` | `number` | Yes | Part or chapter number (e.g. `1`, `2`). |
+| `videoUrl` | `string` | No | Remote URL of the video source. Required to start a download. |
+| `keyUrl` | `string` | No | Remote decryption key URL for protected streams; the fetched key is stored AES-GCM-encrypted. |
+| `metadata` | `Partial<OfflineVideoMetadata>` | No | Context info (`title`, `courseId`, `gradeId`, `tutorialId`, `coverUrl`, `colors`, …). |
 
 ### Return Values & States (`VideoDownloaderResult`)
 
 | Property / Method | Type | Description |
 | :--- | :--- | :--- |
-| `status` | `DownloadStatus` | `'idle' | 'downloading' | 'paused' | 'completed' | 'error'` |
-| `progress` | `number` | Floating point percentage between `0` and `100`. |
-| `downloadedBytes` | `number` | Total bytes downloaded and flushed to disk so far. |
-| `totalBytes` | `number` | Estimated or confirmed total size of the file in bytes. |
-| `localVideoUrl` | `string | null` | Clean Blob URL referencing the decrypted OPFS video file. |
-| `localKeyUrl` | `string | null` | Clean Blob URL for the stored decryption key (if applicable). |
-| `error` | `string | null` | Human-readable error message in case of failure. |
+| `status` | `DownloadStatus` | `'idle' \| 'downloading' \| 'paused' \| 'completed' \| 'error'` |
+| `progress` | `number` | Percentage between `0` and `100`; `100` when completed. |
+| `downloadedBytes` | `number` | Bytes downloaded and flushed to disk so far. |
+| `totalBytes` | `number` | Estimated or confirmed total file size in bytes. |
+| `localPlayableSrc` | `string \| null` | Blob URL for the locally stored video file (`completed` only). |
+| `localDecryptedKeySrc` | `string \| null` | Blob URL for the stored decryption key, if any. |
+| `error` | `string \| null` | Human-readable error message. |
 | `startDownload()` | `() => Promise<void>` | Starts a new download or resumes a paused one. |
-| `pauseDownload()` | `() => Promise<void>` | Pauses the active fetch and releases locks safely. |
-| `cancelDownload()` | `() => Promise<void>` | Aborts download and removes partial progress. |
-| `removeOfflineVideo()`| `() => Promise<void>` | Deletes the file from OPFS and removes its record from IndexedDB. |
+| `pauseDownload()` | `() => void` | Pauses the active fetch and safely commits partial progress. |
+| `cancelDownload()` | `() => void` | Alias of `pauseDownload()` (aborts the active fetch). |
+| `removeDownload()` | `() => Promise<void>` | Deletes the OPFS files and the IndexedDB record (throws if another tab holds the lock). |
+
+On mount (and on every `OFFLINE_DOWNLOADS_CHANGED` event) the hook reloads the saved record: interrupted `'downloading'` states are surfaced as `'paused'`, and completed videos are materialized into blob URLs.
 
 ---
 
-## Integration with Sibtorsh Player
+## Low-Level Exports
 
-Connect offline storage seamlessly with `@alirezahosseini/sibtorsh-player`:
+For custom workers or programmatic management outside React.
 
-```tsx
-import React from "react";
-import VideoPlayer from "@alirezahosseini/sibtorsh-player";
-import { useVideoDownloader } from "@realashrafi/offline-video-core";
+### OPFS Storage Service
 
-export default function CoursePlayerSection({ video, selectedPart }) {
-  const {
-    status,
-    localVideoUrl,
-    localKeyUrl,
-  } = useVideoDownloader({
-    videoId: video.id,
-    part: selectedPart.part_number,
-    videoUrl: selectedPart.video_url,
-    keyUrl: selectedPart.key_url,
-    metadata: {
-      title: video.title,
-      courseId: video.course_id,
-    },
-  });
-
-  const videoSource = (status === "completed" && localVideoUrl) 
-    ? localVideoUrl 
-    : selectedPart.video_url;
-
-  const keySource = (status === "completed" && localKeyUrl) 
-    ? localKeyUrl 
-    : selectedPart.key_url;
-
-  return (
-    <div className="aspect-video w-full">
-      <VideoPlayer
-        src={videoSource}
-        keySrc={keySource}
-        title={video.title}
-        poster={video.poster}
-      />
-    </div>
-  );
-}
-```
-
----
-
-## Low-Level Services API
-
-For custom background workers or programmatic management outside React:
-
-### Diagnostics
+Root directories `videos/` and `temp/` are created on demand (`getDirectories()`).
 
 ```ts
-import { runDiagnostics } from "@realashrafi/offline-video-core";
+import {
+  getDirectories,
+  getTempDownloadedBytes,
+  openTempWriter,
+  appendTempChunk,
+  resetTempVideo,
+  finalizeVideo,
+  getVideoFile,
+  deleteVideoAndTemp,
+} from "@realashrafi/offline-video-core";
 
-const report = await runDiagnostics();
-// Returns: { opfs: boolean, webLocks: boolean, webCrypto: boolean, indexedDB: boolean, fullySupported: boolean }
+// Byte offset of the existing temp file (0 if none) — used for Range resume
+const loaded = await getTempDownloadedBytes(videoId, part);
+
+// Stream chunks into the temp file (single writer; closing commits on pause)
+const writer = await openTempWriter(videoId, part);
+await writer.write(chunk);
+await writer.close();
+
+// Or append a single chunk in one call
+await appendTempChunk(videoId, part, new Uint8Array(/* ... */));
+
+// Atomically move temp -> videos/video_{id}_{part}.m4v (+ manifest JSON)
+const name = await finalizeVideo(videoId, part, { fileSize: loaded });
+
+// Read the finished file back as a File (null if missing)
+const file = await getVideoFile(videoId, part);
+
+// Remove video, manifest, and temp file
+await deleteVideoAndTemp(videoId, part);
+
+// Start the download over from scratch
+await resetTempVideo(videoId, part);
 ```
 
-### Database Service (`offlineDb`)
-
-Tracks video metadata, download progress, and filter lookups.
+### Database Service (IndexedDB)
 
 ```ts
-import { offlineDb } from "@realashrafi/offline-video-core";
+import {
+  initDB,
+  upsertDownloadRecord,
+  getDownloadRecord,
+  updateDownloadProgress,
+  getAllDownloads,
+  getDownloadsByFilter,
+  deleteDownloadRecord,
+  OFFLINE_DOWNLOADS_CHANGED,
+} from "@realashrafi/offline-video-core";
 
-// Fetch all completed downloads for a specific course
-const downloads = await offlineDb.getVideosByFilter({ courseId: "123" });
+// One record per [videoId, part]
+const record = await getDownloadRecord(videoId, part);
 
-// Get raw metadata for a specific part
-const item = await offlineDb.getVideo(videoId, partNumber);
+// List/filter downloads (sorted by most recent `updatedAt`)
+const list = await getDownloadsByFilter({ courseId: 123, status: "completed" });
+
+// Update progress inline
+await updateDownloadProgress(videoId, part, downloadedBytes, "downloading");
+
+// Listen for cross-tab changes
+window.addEventListener(OFFLINE_DOWNLOADS_CHANGED, refresh);
 ```
 
-### Storage Service (`opfsStorage`)
+`DownloadsFilter` supports `gradeId`, `courseId`, `tutorialId`, and `status`; filters compose.
 
-Interacts directly with the Origin Private File System:
+### Crypto Service (AES-GCM)
+
+Protects stored values at rest (not against scripts running in the same origin). The per-origin master key is non-extractable and persisted in IndexedDB.
 
 ```ts
-import { opfsStorage } from "@realashrafi/offline-video-core";
+import { encryptKey, decryptKey } from "@realashrafi/offline-video-core";
 
-// Write a chunk stream or blob
-await opfsStorage.saveFile(filename, dataBlob);
+// Encrypt a fetched key string -> "v1:<base64(iv + ciphertext)>"
+const encryptedKey = await encryptKey(keyUrl ?? plainKey);
 
-// Read back as an in-memory Blob
-const blob = await opfsStorage.getFile(filename);
-
-// Purge physical file
-await opfsStorage.deleteFile(filename);
+// Decrypt it back when playback starts
+const plainKey = await decryptKey(encryptedKey);
 ```
-
-### Crypto Service (`cryptoService`)
-
-Hardware-accelerated envelope encryption with `AES-GCM`:
-
-```ts
-import { cryptoService } from "@realashrafi/offline-video-core";
-
-// Encrypt payload before persisting
-const encryptedData = await cryptoService.encryptData(rawBuffer);
-
-// Decrypt buffer on playback initiation
-const decryptedBuffer = await cryptoService.decryptData(encryptedData);
-```
-
----
-
-## HLS & AES-128 Offline Playback
-
-When caching encrypted streams, the core saves both the media segments and the protected decryption key:
-
-1. **Remote Fetch:** Downloads segments and requests the key via authorized headers or authenticated session cookies.
-2. **At-Rest Protection:** Encrypts raw chunks using the device's local Master Key generated via `crypto.subtle`.
-3. **Local Stream Assembly:** On demand, creates transient `blob:` URLs for the media and the key.
-4. **Playback Handshake:** Feed the generated `localVideoUrl` and `localKeyUrl` directly into `@alirezahosseini/sibtorsh-player`.
 
 ---
 
 ## Concurrency & Tab Synchronization
 
-Multiple tabs attempting to download the same video simultaneously can lead to race conditions. The core leverages the **Web Locks API** (`navigator.locks`):
+Downloads and removals run under the Web Locks API:
 
 ```ts
-navigator.locks.request(`download_${videoId}_${part}`, async (lock) => {
-  // Safe single-worker execution scope
+navigator.locks.request(`offline-video-${videoId}-${part}`, { ifAvailable: true }, async (lock) => {
+  if (!lock) throw new Error("Download active in another tab.");
+  // safe single-worker execution scope
 });
 ```
 
-- If Tab A begins downloading, Tab B receives state updates via storage events without triggering duplicate network requests.
-- When Tab A closes unexpectedly, the lock drops gracefully, permitting Tab B or subsequent sessions to resume cleanly.
+- If Tab A is downloading, Tab B receives updates via `OFFLINE_DOWNLOADS_CHANGED` without issuing duplicate network requests.
+- When Tab A closes unexpectedly, the lock is dropped and any other tab or session can resume cleanly.
+- `removeDownload()` fails gracefully if another tab holds the lock for that video.
 
 ---
 
-## Browser Support & PWA Storage Quota
+## Browser Support & Storage Quota
 
-| Technology | Chrome / Edge / Chromium | Safari (iOS & macOS) | Firefox |
+| Technology | Chrome / Edge (Chromium) | Safari (iOS & macOS) | Firefox |
 | :--- | :--- | :--- | :--- |
 | **OPFS** | Supported (v86+) | Supported (v15.2+) | Supported (v111+) |
 | **IndexedDB** | Supported | Supported | Supported |
 | **Web Locks** | Supported (v69+) | Supported (v15.4+) | Supported (v96+) |
 | **Web Crypto** | Supported | Supported | Supported |
 
-### Requesting Persistent Storage Quota
-
-PWAs may have storage cleared by aggressive OS heuristics when under memory pressure. Request persistent storage on user consent:
+Request persistent storage so OS heuristics cannot silently evict offline videos:
 
 ```ts
-if (navigator.storage && navigator.storage.persist) {
+if (navigator.storage?.persist) {
   const isPersisted = await navigator.storage.persist();
   console.log(`Persistent storage granted: ${isPersisted}`);
 }
@@ -333,17 +245,15 @@ if (navigator.storage && navigator.storage.persist) {
 
 ## Troubleshooting
 
-### `IndexedDB connected: false` / VersionMismatch
-If upgrading from an earlier schema version, existing caches might cause open-request deadlocks:
-1. Open DevTools -> **Application** -> **Storage** -> **IndexedDB**.
-2. Delete the offline core database.
-3. Refresh the page to allow `initDB()` to create fresh object stores.
-
-### `OPFS not supported in InPrivate/Incognito mode`
-Certain browsers disable OPFS access inside Private/Incognito windows to prevent persistent fingerprinting. Verify via `runDiagnostics()` and gracefully advise the user to switch to a regular browsing tab.
+- **`Offline database upgrade is blocked by another tab`** — Close other tabs using the app (or refresh them) so the schema upgrade can proceed.
+- **`This video is being downloaded in another player or tab.`** — The per-video Web Lock is held elsewhere; wait for the other tab to finish or release.
+- **`Compressed video responses cannot be safely resumed.`** — The server sends a non-`identity` `Content-Encoding`, which breaks byte-range integrity; serve the video uncompressed.
+- **`The offline video is missing. Download it again.`** — The OPFS file was evicted or cleared while the IndexedDB record still exists. Re-run `startDownload()`.
+- **Private/Incognito mode** — Some browsers restrict OPFS in private windows; detect this up front and advise switching to a regular tab.
+- **Resetting a corrupted install** — In DevTools → Application → Storage, delete the `AppOfflineDB` and `AppOfflineCrypto` databases, then reload.
 
 ---
 
 ## License
 
-Proprietary / Private package for **Sibtorsh PWA Ecosystem**. All rights reserved.
+MIT © [realashrafi](https://github.com/realashrafi)
